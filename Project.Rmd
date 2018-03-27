@@ -1,0 +1,159 @@
+
+##Predicting Exercise Quality With Machine Learning
+Date: March 27, 2018<br/>
+E-mail: chenxumark@gmail.com<br/>
+Author: Chen Xu<br/>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(out.extra='style="display:block; margin: auto"', 
+                      fig.align="center", 
+                      fig.width = 4.5, 
+                      fig.height = 3)
+
+library(plyr)
+library(dplyr)
+library(caret)
+library(corrplot)
+library(parallel)
+library(doParallel)
+```
+
+
+### Executive Summary
+
+People regularly quantify how much of a particular activity they do, but they rarely quantify how well they do it. Therefore, the goal of this report is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict if an exercise is correctly performed or not.
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+This project will utilize machine learning techniques to predict which class of exercise fits best the given test dataset, composed by 20 observations.
+
+### Exploratory Analysis
+
+The data of exploratory analysis can be downloaded online and the process can be done as below. 
+
+
+```{r data.load, message=FALSE, cache=TRUE}
+train_data_url  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"; 
+test_data_url   <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+train_data_file <- "training_data.csv"
+test_data_file  <- "testing_data.csv"
+
+if(!file.exists(train_data_file)) 
+        download.file(train_data_url, destfile = train_data_file)
+if(!file.exists(test_data_file))
+        download.file(test_data_url,  destfile = test_data_file)
+
+# Weight Lifting Exercise dataset
+train_data<- read.csv(train_data_file)
+test_data<- read.csv(test_data_file)
+
+d <- dim(train_data)
+```
+
+The raw training data contains `r d[1]` observations of `r d[2]` variables.
+
+### Data Cleaning
+In this step, the dataset will be cleaned and get rid of observations with missing values as well as some meaningless variables.
+
+1. clean the Near Zero Variance Variables.
+
+```{r pre.process.zero, warning=FALSE, cache=TRUE}
+NZV <- nearZeroVar(train_data, saveMetrics = TRUE)
+train_data<- train_data[, !NZV$nzv]
+test_data<- test_data[, !NZV$nzv]
+```
+
+2. remove some columns of the dataset that do not contribute much to the accelerometer measurements.
+
+```{r pre.process.remove, warning=FALSE, cache=TRUE}
+regex <- grepl("^X|timestamp|user_name", names(train_data))
+training <- train_data[, !regex]
+testing <- test_data[, !regex]
+```
+
+3.Removing columns that contain NA's
+
+```{r pre.process.na, cache = TRUE}
+cond <- (colSums(is.na(training)) == 0)
+training <- training[, cond]
+testing <- testing[, cond]
+d1<-dim(training)
+d2<-dim(testing)
+```
+
+After cleaning process, we are left with `r d1[1]` observations of `r d1[2]` variables to build our model.
+
+4.Correlation Matrix of Columns in the Training Data set. 
+```{r pre.process.corr, cache = TRUE}
+corrplot(cor(training[, -length(names(training))]), method = "color", tl.cex = 0.5, tl.col="gray")
+```
+
+### Model Training
+
+Dataset can be split into `train_data` & `test_data` and then proceed with the exploratory analysis.
+
+```{r data.split, cache = TRUE}
+set.seed(1234) # To be reproducible
+
+intrain<- createDataPartition(training$classe, p=0.75, list=FALSE)
+training <- training[intrain,]
+validation  <- training[-intrain,]
+
+```
+
+Now that we have the most significant variables selected, we will setup the parallel processing libraries using the method described by Greski. This will allow faster processing times on multi-core CPUs.
+
+```{r parallel.setup}
+cluster <- makeCluster(detectCores()) # I'm running in a VM so I'm using all cores
+registerDoParallel(cluster)
+
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+```
+
+Next, three different models will be fit to check which one is more accurate for this dataset: random forest (rf), boosting with trees (gbm) and linear discriminant analysis (lda).
+
+```{r model.training, cache=TRUE, message=FALSE}
+model1 <- train(classe ~ ., method = "rf",  data = training, trControl = fitControl, verbose = FALSE)
+model2 <- train(classe ~ ., method = "gbm", data = training, trControl = fitControl, verbose = FALSE)
+model3 <- train(classe ~ ., method = "lda", data = training, trControl = fitControl, verbose = FALSE)
+
+stopCluster(cluster) # close parallel cluster
+```
+
+The code below will run the predictions for the `validation` dataset using the models built above and plot the confusion matrices and accuracies for each model.
+
+```{r model.analysis, cache=TRUE, message=FALSE}
+p1 <- predict(model1, validation)
+p2 <- predict(model2, validation) 
+p3 <- predict(model3, validation)
+
+c1 <- confusionMatrix(p1, validation$classe)
+c2 <- confusionMatrix(p2, validation$classe)
+c3 <- confusionMatrix(p3, validation$classe)
+
+
+c1 #random forest (rf) 
+c2 #boosting with trees (gbm) 
+c3 #linear discriminant analysis (lda)
+```
+
+The random forest model outperform both the gbm and lda models, the lda being by far the one with the worst performance. 
+
+### Predicting the test Set
+
+The final step is to predict the testing data set composed by 20 observations, as proposed by the project's especification. We will use the random forest model above, since it gave the best predictions.
+
+```{r final.pred, message=FALSE}
+
+pred <- predict(model1, testing)
+pred
+
+```
+
+### Conclusion
+
+For this Report, the random forest model (`rf`) outperformed both the boosting with trees (`gbm`) and linear discriminant analysis (`lda`) models. Nevertheless, the `gbm` model performed close to the random forest, suggesting that it could be applicable to a real world scenario. 
